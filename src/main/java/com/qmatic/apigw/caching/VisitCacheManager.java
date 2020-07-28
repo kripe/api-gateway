@@ -56,7 +56,9 @@ public class VisitCacheManager {
         Cache visitsOnBranchCache = cacheManager.getCache(GatewayConstants.VISITS_ON_BRANCH_CACHE);
         if (visitsOnBranchCache != null) {
             VisitStatusMap visitsOnBranch = getVisitStatusMap(branchId, visitsOnBranchCache);
-            visit = visitsOnBranch.get(visitId);
+            if (visitsOnBranch != null) {
+                visit = visitsOnBranch.get(visitId);
+            }
         } else {
             logCacheError(GatewayConstants.VISITS_ON_BRANCH_CACHE);
         }
@@ -110,9 +112,18 @@ public class VisitCacheManager {
     }
 
     private VisitStatusMap cacheAndGetVisitsOnBranch(Long branchId) {
-        OrchestraProperties.UserCredentials userCredentials = orchestraProperties.getCredentials(getAuthToken());
-        VisitStatusMap visitsOnBranch = centralRestClient.getAllVisitsOnBranch(branchId, userCredentials);
-        cacheVisits(branchId, visitsOnBranch);
+        VisitStatusMap visitsOnBranch = null;
+        try {
+            OrchestraProperties.UserCredentials userCredentials = orchestraProperties.getCredentials(getAuthToken());
+            visitsOnBranch = centralRestClient.getAllVisitsOnBranch(branchId, userCredentials);
+            cacheVisits(branchId, visitsOnBranch);
+        } catch (Exception e) {
+            if (log.isDebugEnabled()) {
+                log.error("Failed to fetch visits on branch {}, error:", branchId, e);
+            } else {
+                log.error("Failed to fetch visits on branch {}, error:{}", branchId, e.getMessage());
+            }
+        }
         return visitsOnBranch;
     }
 
@@ -130,9 +141,11 @@ public class VisitCacheManager {
         Cache visitsOnBranchCache = cacheManager.getCache(GatewayConstants.VISITS_ON_BRANCH_CACHE);
         if (visitsOnBranchCache != null) {
             VisitStatusMap visitsOnBranch = getVisitStatusMap(branchId, visitsOnBranchCache);
-            VisitStatus visit = visitsOnBranch.get(visitId);
-            if (visit != null) {
-                checksum = visit.getChecksum();
+            if (visitsOnBranch != null) {
+                VisitStatus visit = visitsOnBranch.get(visitId);
+                if (visit != null) {
+                    checksum = visit.getChecksum();
+                }
             }
         } else {
             logCacheError(GatewayConstants.VISITS_ON_BRANCH_CACHE);
@@ -175,9 +188,11 @@ public class VisitCacheManager {
         Cache visitsOnBranchCache = cacheManager.getCache(GatewayConstants.VISITS_ON_BRANCH_CACHE);
         if (visitsOnBranchCache != null) {
             VisitStatusMap visitsOnBranch = getVisitStatusMap(branchId, visitsOnBranchCache);
-            for(Long visitKey : visitsOnBranch.keySet()) {
-                Long visitId = visitsOnBranch.get(visitKey).getVisitId();
-                highestVisitIdOnBranch =  visitId > highestVisitIdOnBranch ? visitId : highestVisitIdOnBranch;
+            if (visitsOnBranch != null) {
+                for (Long visitKey : visitsOnBranch.keySet()) {
+                    Long visitId = visitsOnBranch.get(visitKey).getVisitId();
+                    highestVisitIdOnBranch = visitId > highestVisitIdOnBranch ? visitId : highestVisitIdOnBranch;
+                }
             }
         }
         return highestVisitIdOnBranch;
