@@ -5,8 +5,10 @@ import com.qmatic.apigw.SslCertificateManager;
 import com.qmatic.apigw.exception.CentralCommunicationException;
 import com.qmatic.apigw.filters.FilterConstants;
 import com.qmatic.apigw.properties.OrchestraProperties;
+import com.qmatic.apigw.util.GlobalVariableParser;
 import com.qmatic.common.geo.Branch;
 import org.apache.commons.codec.binary.Base64;
+import org.apache.commons.lang.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,12 +19,16 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
 
 import javax.annotation.PostConstruct;
 import java.io.IOException;
 import java.nio.charset.Charset;
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.springframework.http.HttpStatus.GATEWAY_TIMEOUT;
 
@@ -38,6 +44,14 @@ public final class CentralRestClient {
     private String mobileServiceBranchesUrl;
     @Value("${currentStatus.visits_on_branch_url}")
     private String visitsOnBranchUrl;
+    @Value("${currentStatus.visitsOnBranchFromGlobalVariablesUrl:}")
+    String visitsOnBranchFromGlobalVariablesUrl;
+    @Value("${orchestra.central.getVisitsUsingGlobalVariables:false}")
+    Boolean getVisitsUsingGlobalVariables = false;
+    @Value("#{'${orchestra.central.globalVariableAllowBranches:}'.split(',')}")
+    List<Long> globalVariableAllowBranches = new ArrayList<>();
+    @Value("#{'${orchestra.central.globalVariableDisallowBranches:}'.split(',')}")
+    List<Long> globalVariableDisallowBranches = new ArrayList<>();
     @Value("${orchestra.central.connectTimeout:0}")
     String connectTimeout;
     @Value("${orchestra.central.readTimeout:0}")
@@ -45,6 +59,7 @@ public final class CentralRestClient {
     @Autowired
     private RestTemplateBuilder restTemplateBuilder;
     private RestTemplate restTemplate;
+    private RestTemplate restTemplateForGlobalVariables;
     // This needs to be loaded before this class to enable the keystore settings to be applied before this class loads it's components
     @Autowired
     private SslCertificateManager sslCertificateManager;
@@ -54,15 +69,21 @@ public final class CentralRestClient {
         CentralHttpErrorHandler centralErrorHandler = new CentralHttpErrorHandler();
         if (getConnectTimeout() != 0 || getReadTimeout() != 0) {
             restTemplate = restTemplateBuilder
-                    .errorHandler(centralErrorHandler)
+                    .setConnectTimeout(getConnectTimeout())
+                    .setReadTimeout(getReadTimeout())
+                    .build();
+            restTemplateForGlobalVariables = restTemplateBuilder
                     .setConnectTimeout(getConnectTimeout())
                     .setReadTimeout(getReadTimeout())
                     .build();
         } else {
             restTemplate = new RestTemplate();
+            restTemplateForGlobalVariables = new RestTemplate();
         }
         restTemplate.setErrorHandler(centralErrorHandler);
 
+        globalVariableAllowBranches.remove(null);
+        globalVariableDisallowBranches.remove(null);
         log.info("connectTimeout: {}", connectTimeout);
         log.info("readTimeout: {}", readTimeout);
     }
@@ -140,10 +161,59 @@ public final class CentralRestClient {
     }
 
     public VisitStatusMap getAllVisitsOnBranch(Long branchId, OrchestraProperties.UserCredentials userCredentials) {
+        VisitStatusMap visitStatusMap = null;
+        try {
+            if (shouldFetchFromGlobalVariables(branchId)) {
+                visitStatusMap = getVisitsOnBranchFromCallViaGlobalVariables(branchId, userCredentials);
+            }
+            if (visitStatusMap == null) {
+                return getVisitsOnBranchFromCallViaMobileConnector(branchId, userCredentials);
+            }
+        } catch(RuntimeException e) {
+            throw logAndConvertException(e);
+        }
+        return visitStatusMap;
+    }
+
+    boolean shouldFetchFromGlobalVariables(Long branchId) {
+        return globalVariableSettingsAreEnabled() &&
+                branchIsNotInForbiddenList(branchId) &&
+                branchIsInAllowedListIfDefined(branchId);
+    }
+
+    private boolean globalVariableSettingsAreEnabled() {
+        return getVisitsUsingGlobalVariables &&
+                StringUtils.isNotBlank(visitsOnBranchFromGlobalVariablesUrl);
+    }
+
+    private boolean branchIsNotInForbiddenList(Long branchId) {
+        return !(globalVariableDisallowBranches != null && globalVariableDisallowBranches.contains(branchId));
+    }
+
+    private boolean branchIsInAllowedListIfDefined(Long branchId) {
+        return globalVariableAllowBranches == null || globalVariableAllowBranches.isEmpty() || globalVariableAllowBranches.contains(branchId);
+    }
+
+    private VisitStatusMap getVisitsOnBranchFromCallViaGlobalVariables(Long branchId, OrchestraProperties.UserCredentials userCredentials) {
+        log.debug("Retrieving visits on branch {} from central global variables", branchId);
+        try {
+            String url = visitsOnBranchFromGlobalVariablesUrl.replace(FilterConstants.BRANCH_ID_PATTERN, Long.toString(branchId));
+            ResponseEntity<String> allVisitsOnBranch = restTemplateForGlobalVariables.exchange(url, HttpMethod.GET,
+                    new HttpEntity<>(createAuthorizationHeader(userCredentials)), String.class, new Object[]{});
+            if (allVisitsOnBranch.getStatusCodeValue() == 200) {
+                return GlobalVariableParser.parseToVisitStatusMap(allVisitsOnBranch);
+            }
+        } catch (IllegalArgumentException | HttpClientErrorException | HttpServerErrorException e) {
+            log.debug("Could not fetch visits for branch {} from central global variables", branchId);
+        }
+        return null;
+    }
+
+    private VisitStatusMap getVisitsOnBranchFromCallViaMobileConnector(Long branchId, OrchestraProperties.UserCredentials userCredentials) {
         try {
             log.debug("Retrieving visits on branch {} from central", branchId);
             try {
-                String url = visitsOnBranchUrl.replace("{" + FilterConstants.BRANCH_ID + "}", Long.toString(branchId));
+                String url = visitsOnBranchUrl.replace(FilterConstants.BRANCH_ID_PATTERN, Long.toString(branchId));
                 ResponseEntity<VisitStatusMap> allVisitsOnBranch = restTemplate.exchange(url, HttpMethod.GET,
                         new HttpEntity<>(createAuthorizationHeader(userCredentials)), VisitStatusMap.class, new Object[]{});
                 return allVisitsOnBranch.getBody();
@@ -155,5 +225,4 @@ public final class CentralRestClient {
             throw logAndConvertException(e);
         }
     }
-
 }

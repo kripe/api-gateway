@@ -8,6 +8,7 @@ public class FilterConstants {
     public static final String ERROR_MESSAGE = "ERROR_MESSAGE";
     public static final String BRANCHES = "branches";
     public static final String BRANCH_ID = "branchId";
+    public static final String BRANCH_ID_PATTERN = "{branchId}";
     public static final String PROXY = "proxy";
     public static final String PRE_FILTER = "pre";
     public static final String POST_FILTER = "post";

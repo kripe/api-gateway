@@ -53,6 +53,17 @@ orchestra:
     # A check will be done if another thread is running that call for the specific branch, and if to it will wait until that call completes
     #throttleVisitOnBranches: true
 
+    # Use alternate method to fetch visit information from branches, if system uses mobilevisitspush the API gw will instead look for a
+    # global variable with the name mobileVisits_<branch_id>.
+    # If the variable does not exist, it will fall back to the default behavior
+    # Note that this requires mobile user to be able to access the entrypoint connector
+    # default false
+    # The list globalVariableAllowBranches can de defined to only allow certain branches (all others will be blocked)
+    # The list globalVariableDisallowBranches can be defined to explicitly block some branches (all others are allowed)
+    getVisitsUsingGlobalVariables: false
+    #globalVariableAllowBranches: 1,2
+    #globalVariableDisallowBranches: 3
+
   # SSL trust store for the jvm
   # trustStore: conf/truststore.jks
   # trustStorePass: changeit
@@ -232,7 +243,7 @@ geoService:
 
 currentStatus:
   visits_on_branch_url: ${orchestra.central.url}/qsystem/mobile/rest/v2/branches/{branchId}/visits
-
+  visitsOnBranchFromGlobalVariablesUrl: ${orchestra.central.url}/qsystem/rest/entrypoint/variables/mobileVisits_{branchId}
 # CORS setup
 # Orchestra CORS configuation can be overriden in API Gateway. By default disabled.
 
